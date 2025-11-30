@@ -1112,7 +1112,18 @@ class BaseDatasetProcessing(BaseProcessor if _HAS_INTERFACES else object):
                 logging.info(f"Loading custom variable filter for {model}")
                 custom_module = importlib.import_module(f"openbench.data.custom.{model}_filter")
                 custom_filter = getattr(custom_module, f"filter_{model}")
-                self, ds = custom_filter(self, ds)
+                self, ds_or_da = custom_filter(self, ds)
+
+                # If filter returned a Dataset, extract the variable; if DataArray, use directly
+                if isinstance(ds_or_da, xr.Dataset):
+                    current_varname = getattr(self, f"{datasource}_varname")
+                    var_to_extract = current_varname[0] if isinstance(current_varname, list) else current_varname
+                    if var_to_extract in ds_or_da:
+                        return ds_or_da[var_to_extract]
+                    else:
+                        raise KeyError(f"Variable {var_to_extract} not found in filtered dataset")
+                else:
+                    return ds_or_da
             except AttributeError:
                 # Only show warning once per model using module-level tracking
                 if model not in _MODULE_CUSTOM_FILTER_WARNINGS:
@@ -1202,6 +1213,24 @@ class BaseDatasetProcessing(BaseProcessor if _HAS_INTERFACES else object):
         # Try alternative path if no files found
         if not var_files:
             var_files = glob.glob(os.path.join(dirx, str(year), f'{prefix}{year}*{suffix}.nc'))
+
+        # Filter files: only keep files where the part between prefix+year and suffix contains no letters
+        # This prevents matching files like "prefix_cama_year" when we want "prefix_year"
+        # E.g., "FUXI-test_hist_2006-01.nc" ✓, "FUXI-test_hist_cama_2006-01.nc" ✗
+        if var_files:
+            filtered_files = []
+            # Escape special regex characters in prefix and suffix
+            prefix_escaped = re.escape(prefix)
+            suffix_escaped = re.escape(suffix) if suffix else ''
+            # Pattern: prefix + year + (only digits and symbols, no letters) + suffix + .nc
+            pattern = re.compile(rf'^{prefix_escaped}{year}[^a-zA-Z]*{suffix_escaped}\.nc$')
+            for f in var_files:
+                filename = os.path.basename(f)
+                if pattern.match(filename):
+                    filtered_files.append(f)
+                else:
+                    logging.debug(f"Filtered out file (contains letters after year): {filename}")
+            var_files = filtered_files
 
         # Verify files were found
         if not var_files:

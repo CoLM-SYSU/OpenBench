@@ -21,6 +21,8 @@ import numpy as np
 from typing import Dict, Any, List, Tuple, Union, Optional
 from pathlib import Path
 import warnings
+import re
+import importlib.util
 
 
 class ValidationError(Exception):
@@ -328,6 +330,49 @@ class PreValidator:
         for sim_source in sim_sources:
             self._validate_source_config(item, sim_source, self.sim_nml, 'simulation')
 
+    def _check_filter_handles_item(self, model: str, item: str) -> Tuple[bool, Optional[str]]:
+        """
+        Check if a filter file handles a specific evaluation item.
+
+        Args:
+            model: Model name (e.g., 'CoLM', 'CLM5')
+            item: Evaluation item name (e.g., 'Precipitation')
+
+        Returns:
+            Tuple of (handles_item: bool, filter_path: Optional[str])
+        """
+        # Construct filter file path
+        filter_filename = f"{model}_filter.py"
+        filter_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            'data', 'custom', filter_filename
+        )
+
+        if not os.path.exists(filter_path):
+            return False, None
+
+        try:
+            # Read filter file content
+            with open(filter_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Check if the filter handles this item
+            # Look for patterns like: if info.item == "Precipitation":
+            patterns = [
+                rf'if\s+info\.item\s*==\s*["\']({re.escape(item)})["\']',
+                rf'elif\s+info\.item\s*==\s*["\']({re.escape(item)})["\']',
+            ]
+
+            for pattern in patterns:
+                if re.search(pattern, content):
+                    return True, filter_path
+
+            return False, None
+
+        except Exception as e:
+            logging.debug(f"Error checking filter {filter_path}: {e}")
+            return False, None
+
     def _validate_source_config(self, item: str, source: str, nml: Dict[str, Any], source_type: str):
         """
         Validate configuration for a specific data source after UpdateNamelist.
@@ -353,10 +398,23 @@ class PreValidator:
             f'{source}_varunit',  # Note: varunit after UpdateNamelist
         ]
 
+        # Get model name if available (for filter checking)
+        model_name = nml[item].get(f'{source}_model', None)
+
+        # Check if filter handles this item (only for simulation sources with model info)
+        filter_handles_item = False
+        filter_path = None
+        if source_type == 'simulation' and model_name:
+            filter_handles_item, filter_path = self._check_filter_handles_item(model_name, item)
+
         missing_fields = []
         for field in required_fields:
             value = nml[item].get(field)
             if value is None or value == '':
+                # Skip varname and varunit validation if filter handles this item
+                if filter_handles_item and field in [f'{source}_varname', f'{source}_varunit']:
+                    logging.info(f"  ✓ {field} will be handled by filter: {filter_path}")
+                    continue
                 missing_fields.append(field)
 
         if missing_fields:
@@ -437,7 +495,7 @@ class PreValidator:
                 'gc m-2 day-1': ['gc m-2 s-1', 'g c m-2 s-1', 'g c m-2 day-1', 'g m-2 s-1', 'mol m-2 s-1', 'mumolco2 m-2 s-1'],
                 'mm day-1': ['kg m-2 s-1', 'mm s-1', 'mm hr-1', 'mm h-1', 'mm hour-1', 'mm mon-1', 'mm m-1', 'mm month-1', 'w m-2 heat', 'mm 3hour-1'],
                 'w m-2': ['mj m-2 day-1', 'mj m-2 d-1'],
-                'unitless': ['percent', 'percentage', '%', 'g kg-1', 'fraction', 'm3 m-3', 'm2 m-2', 'g g-1'],
+                'unitless': ['percent', 'percentage', '%', 'g kg-1', 'fraction', 'm3 m-3', 'm2 m-2', 'g g-1', '1', '0'],
                 'k': ['c', 'degc', 'degreec', 'degree c', 'celsius', 'f', 'degf', 'degreef', 'degree f', 'fahrenheit'],
                 'm3 s-1': ['m3 day-1', 'm3 d-1', 'l s-1'],
                 'mcm': ['m3', 'km3', 'million cubic meters'],
@@ -570,14 +628,19 @@ class PreValidator:
         # After UpdateNamelist, units are directly in nml[item][f'{source}_varunit']
         if item in nml:
             # Try varunit first (standard format after UpdateNamelist)
-            unit = nml[item].get(f'{source}_varunit', '').strip()
-            if unit:
-                return unit
+            unit_value = nml[item].get(f'{source}_varunit', '')
+            # Convert to string if it's not already (handle integer values like 0)
+            if unit_value is not None and unit_value != '':
+                unit = str(unit_value).strip()
+                if unit:
+                    return unit
 
             # Fallback to _unit for backward compatibility
-            unit = nml[item].get(f'{source}_unit', '').strip()
-            if unit:
-                return unit
+            unit_value = nml[item].get(f'{source}_unit', '')
+            if unit_value is not None and unit_value != '':
+                unit = str(unit_value).strip()
+                if unit:
+                    return unit
 
         return None
 
@@ -627,6 +690,14 @@ class PreValidator:
                 import glob
                 pattern = os.path.join(data_dir, f"{prefix}*{suffix}.nc")
                 files = glob.glob(pattern)
+                # Filter files: only keep files where prefix is followed by digit (year), not letters
+                # This prevents matching "prefix_cama_year.nc" when we want "prefix_year.nc"
+                if files:
+                    prefix_escaped = re.escape(prefix)
+                    suffix_escaped = re.escape(suffix) if suffix else ''
+                    file_pattern = re.compile(rf'^{prefix_escaped}\d[^a-zA-Z]*{suffix_escaped}\.nc$')
+                    filtered_files = [f for f in files if file_pattern.match(os.path.basename(f))]
+                    files = filtered_files if filtered_files else files  # Fallback to original
                 if files:
                     sample_file = files[0]
 
@@ -849,6 +920,24 @@ class PreValidator:
         prefix = nml[item].get(f'{source}_prefix', '')
         suffix = nml[item].get(f'{source}_suffix', '')
 
+        # Helper function to filter files: only keep files where the part after prefix contains no letters before digits
+        # This prevents matching files like "prefix_cama_year" when we want "prefix_year"
+        def filter_files_no_letters_before_year(files, prefix, suffix):
+            """Filter files to exclude those with letters between prefix and year."""
+            if not files:
+                return files
+            filtered = []
+            prefix_escaped = re.escape(prefix)
+            suffix_escaped = re.escape(suffix) if suffix else ''
+            # Pattern: prefix + (year starting with digit) + (only digits and symbols, no letters) + suffix + .nc
+            # Match files like: prefix2006-01.nc, prefix2006.nc but not prefix_cama_2006.nc
+            pattern = re.compile(rf'^{prefix_escaped}\d[^a-zA-Z]*{suffix_escaped}\.nc$')
+            for f in files:
+                filename = os.path.basename(f)
+                if pattern.match(filename):
+                    filtered.append(f)
+            return filtered if filtered else files  # Return original if no matches (fallback)
+
         # Try to find a sample file based on data_groupby
         if data_groupby == 'single':
             sample_file = os.path.join(data_dir, f"{prefix}{suffix}.nc")
@@ -858,12 +947,14 @@ class PreValidator:
             # Find any year file
             pattern = os.path.join(data_dir, f"{prefix}*{suffix}.nc")
             files = glob.glob(pattern)
+            files = filter_files_no_letters_before_year(files, prefix, suffix)
             if files:
                 return files[0]
         elif data_groupby == 'month':
             # Find any month file
             pattern = os.path.join(data_dir, f"{prefix}*{suffix}.nc")
             files = glob.glob(pattern)
+            files = filter_files_no_letters_before_year(files, prefix, suffix)
             if files:
                 return files[0]
 
