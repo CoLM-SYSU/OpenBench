@@ -10,12 +10,74 @@ from pathlib import Path
 import yaml
 
 from openbench.config.schema import DEFAULT_NUM_CORES
-from openbench.gui.path_utils import convert_paths_in_dict, get_openbench_root, to_absolute_path
+from openbench.gui.path_utils import (
+    convert_paths_in_dict,
+    get_openbench_root,
+    is_windows_absolute_path,
+    remote_join,
+    to_absolute_path,
+)
 from openbench.util.names import canonical_variable_name
 
 _BUILTIN_MODEL_KEYS: Optional[Set[str]] = None
 
-LEGACY_GUI_VARIABLE_NAMES = ("Water_Evaporation", "Bare_Soil_Evaporation")
+
+def _transform_vertical_datum(value, transform, root_dir=None):
+    """Preserve the declaration while mapping both external geoid paths."""
+    if value is None:
+        return None
+    from openbench.data.vertical_datum import normalize_vertical_datum_spec
+
+    spec = normalize_vertical_datum_spec(value)
+    for key in ("source_geoid", "target_geoid"):
+        if key in spec:
+            path = os.path.expanduser(os.path.expandvars(spec[key]))
+            if not (path.startswith("/") or is_windows_absolute_path(path) or os.path.isabs(path)):
+                if not root_dir:
+                    # Catalog-only roots are resolved later; never invent a repository-relative geoid path.
+                    spec[key] = path
+                    continue
+                root = os.path.expanduser(os.path.expandvars(root_dir))
+                # Remote POSIX roots must not inherit the Windows client separator.
+                join = remote_join if root.startswith("/") and not is_windows_absolute_path(root) else os.path.join
+                path = join(root, path)
+            spec[key] = transform(path)
+    return spec
+
+
+def _source_binding_time_range(source_config: dict, source_bindings: list[dict]) -> dict:
+    """Translate a GUI binding window to split namelist fields without losing scope."""
+    general = source_config.get("general", {})
+    dataset_years = next(
+        (
+            [cfg["general"].get("syear"), cfg["general"].get("eyear")]
+            for cfg in source_bindings
+            if cfg.get("_years_scope") != "variable"
+            and not cfg.get("general", {}).get("per_var_time_range")
+            and any(cfg.get("general", {}).get(key) not in (None, "") for key in ("syear", "eyear"))
+        ),
+        None,
+    )
+    years = [general.get("syear"), general.get("eyear")]
+    if not general.get("per_var_time_range"):
+        years = dataset_years or years
+    if "years" in source_config:
+        fallback = dataset_years
+        if fallback is None:
+            if source_config.get("_years_scope") == "variable":
+                if "_dataset_years" not in source_config and not source_config["years"]:
+                    raise ValueError(
+                        "Cannot clear binding years without registry dataset coverage; reload the reference"
+                    )
+                fallback = source_config.get("_dataset_years") or []
+            else:
+                fallback = years
+        years = source_config["years"] or fallback
+    result = {"per_var_time_range": True}
+    for key, value in zip(("syear", "eyear"), years):
+        if value not in (None, ""):
+            result[key] = value
+    return result
 
 
 def migrate_gui_variable_config(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -134,23 +196,11 @@ def migrate_gui_variable_config(config: Dict[str, Any]) -> Dict[str, Any]:
     ref_data = migrated.get("ref_data") if isinstance(migrated.get("ref_data"), dict) else {}
     rename_source_general(ref_data.get("general"), "_ref_source", "ref_data.general")
     rename_compound_source_configs(ref_data.get("source_configs"), "ref_data.source_configs")
-    for old_name in LEGACY_GUI_VARIABLE_NAMES:
-        new_name = canonical_variable_name(old_name)
-        if old_name in ref_data:
-            value = ref_data.pop(old_name)
-            ref_data[new_name] = (
-                merge_values(value, ref_data[new_name], f"ref_data.{new_name}") if new_name in ref_data else value
-            )
+    rename_mapping_keys(ref_data, "ref_data")
 
     sim_data = migrated.get("sim_data") if isinstance(migrated.get("sim_data"), dict) else {}
     rename_source_general(sim_data.get("general"), "_sim_source", "sim_data.general")
-    for old_name in LEGACY_GUI_VARIABLE_NAMES:
-        new_name = canonical_variable_name(old_name)
-        if old_name in sim_data:
-            value = sim_data.pop(old_name)
-            sim_data[new_name] = (
-                merge_values(value, sim_data[new_name], f"sim_data.{new_name}") if new_name in sim_data else value
-            )
+    rename_mapping_keys(sim_data, "sim_data")
     for source_name, source_cfg in (sim_data.get("source_configs") or {}).items():
         if isinstance(source_cfg, dict):
             rename_mapping_keys(source_cfg.get("variables"), f"sim_data.source_configs.{source_name}.variables")
@@ -974,6 +1024,8 @@ class ConfigManager:
                     continue
                 override = overrides.setdefault(source_name, {})
                 general_cfg = source_cfg.get("general", {}) if isinstance(source_cfg.get("general"), dict) else {}
+                datum_root = general_cfg.get("root_dir") or general_cfg.get("dir")
+                var_override = {}
                 if general_cfg:
                     for key in (
                         "root_dir",
@@ -1000,20 +1052,37 @@ class ConfigManager:
                         if eyear not in (None, ""):
                             years.append(int(eyear))
                         if years:
-                            override["years"] = years
-                var_override = {}
+                            years_target = var_override if source_cfg.get("_years_scope") == "variable" else override
+                            years_target["years"] = years
                 for key, value in source_cfg.items():
-                    if key in {"general", "_var_name", "def_nml_path", "var_config", "_explicit_override"}:
+                    if key in {
+                        "general",
+                        "_var_name",
+                        "def_nml_path",
+                        "var_config",
+                        "_explicit_override",
+                        "_years_scope",
+                        "_dataset_years",
+                    }:
                         continue
-                    if value not in (None, ""):
-                        var_override[key] = value
+                    if key in {"years", "vertical_datum"} or value not in (None, ""):
+                        var_override[key] = (
+                            _transform_vertical_datum(value, _maybe_transform_path, datum_root)
+                            if key == "vertical_datum"
+                            else value
+                        )
                 nested_var_cfg = source_cfg.get("var_config")
                 if isinstance(nested_var_cfg, dict):
                     for key, value in nested_var_cfg.items():
                         if key == "_explicit_override":
                             continue
-                        if value not in (None, ""):
-                            var_override.setdefault(key, value)
+                        if key == "vertical_datum" or value not in (None, ""):
+                            var_override.setdefault(
+                                key,
+                                _transform_vertical_datum(value, _maybe_transform_path, datum_root)
+                                if key == "vertical_datum"
+                                else value,
+                            )
                 if var_override:
                     variables_override = override.setdefault("variables", {})
                     variables_override[var_name] = var_override
@@ -1076,7 +1145,17 @@ class ConfigManager:
             if src_general.get("fulllist"):
                 entry["fulllist"] = _maybe_transform_path(src_general["fulllist"])
             if isinstance(src_cfg.get("variables"), dict) and src_cfg["variables"]:
-                entry["variables"] = src_cfg["variables"]
+                entry["variables"] = {
+                    name: {
+                        key: _transform_vertical_datum(
+                            value, _maybe_transform_path, src_general.get("root_dir") or src_general.get("dir")
+                        )
+                        if key == "vertical_datum"
+                        else value
+                        for key, value in mapping.items()
+                    }
+                    for name, mapping in src_cfg["variables"].items()
+                }
 
             # Preserve explicit GUI source labels; deriving from paths can collapse
             # distinct cases (Case01/foo and Case01/bar) into one YAML entry.
@@ -1337,6 +1416,16 @@ class ConfigManager:
         # source_configs uses compound key "var_name::source_name"
         organized_configs = {}  # {source_name: {"_general": {...}, var_name: {...}}}
 
+        per_variable_sources = {
+            key.split("::", 1)[1]
+            for key, config in source_configs.items()
+            if "::" in key
+            and (
+                config.get("_years_scope") == "variable"
+                or "years" in config
+                or config.get("general", {}).get("per_var_time_range")
+            )
+        }
         for key, config in source_configs.items():
             if "::" in key:
                 # Compound key format: "var_name::source_name"
@@ -1348,19 +1437,27 @@ class ConfigManager:
                     organized_configs[source_name]["_general"] = config["general"].copy()
                 # Store var-specific config - copy all fields except internal ones
                 var_config = {}
-                skip_fields = {"general", "_var_name", "def_nml_path", "_explicit_override"}
+                skip_fields = {
+                    "general",
+                    "_var_name",
+                    "def_nml_path",
+                    "_explicit_override",
+                    "_years_scope",
+                    "_dataset_years",
+                    "years",
+                }
                 for field, value in config.items():
                     if field not in skip_fields:
                         var_config[field] = value
 
                 # Store per-variable time range settings for this specific variable
-                general = config.get("general", {})
-                if general.get("per_var_time_range"):
-                    var_config["per_var_time_range"] = True
-                    if "syear" in general and general["syear"] != "":
-                        var_config["syear"] = general["syear"]
-                    if "eyear" in general and general["eyear"] != "":
-                        var_config["eyear"] = general["eyear"]
+                if source_name in per_variable_sources:
+                    var_config.update(
+                        _source_binding_time_range(
+                            config,
+                            [cfg for key, cfg in source_configs.items() if key.endswith(f"::{source_name}")],
+                        )
+                    )
 
                 if var_config:
                     organized_configs[source_name][var_name] = var_config
@@ -1444,7 +1541,7 @@ class ConfigManager:
             filtered["general"] = general
 
         # Extract legacy top-level variable mapping fields.
-        var_mapping_keys = ["sub_dir", "varname", "varunit", "prefix", "suffix"]
+        var_mapping_keys = ["sub_dir", "varname", "varunit", "prefix", "suffix", "vertical_datum"]
         top_level_var_mapping = {}
         for key in var_mapping_keys:
             if key in source_data:
@@ -1462,6 +1559,12 @@ class ConfigManager:
                     for key, value in top_level_var_mapping.items():
                         if key not in item_copy:
                             item_copy[key] = value
+                    if "vertical_datum" in item_copy:
+                        item_copy["vertical_datum"] = _transform_vertical_datum(
+                            item_copy["vertical_datum"],
+                            lambda path: to_absolute_path(path, openbench_root),
+                            filtered.get("general", {}).get("root_dir") or filtered.get("general", {}).get("dir"),
+                        )
                     filtered[item] = item_copy
                 elif item_data is not None:
                     filtered[item] = item_data
@@ -1541,6 +1644,12 @@ class ConfigManager:
                     # Remove per_var_time_range from output (it's only for UI control)
                     var_config.pop("per_var_time_range", None)
 
+                    if "vertical_datum" in var_config:
+                        var_config["vertical_datum"] = _transform_vertical_datum(
+                            var_config["vertical_datum"],
+                            lambda path: to_absolute_path(path, openbench_root),
+                            filtered.get("general", {}).get("root_dir") or filtered.get("general", {}).get("dir"),
+                        )
                     if var_config:  # Only add if there's data
                         filtered[item] = var_config
                 elif item_data is not None:
@@ -1606,6 +1715,12 @@ class ConfigManager:
                 if isinstance(item_data, dict):
                     # sub_dir doesn't need path conversion (it's relative to root_dir)
                     filtered[item] = item_data.copy()
+                    if "vertical_datum" in filtered[item]:
+                        filtered[item]["vertical_datum"] = _transform_vertical_datum(
+                            filtered[item]["vertical_datum"],
+                            lambda path: to_absolute_path(path, openbench_root),
+                            filtered.get("general", {}).get("root_dir") or filtered.get("general", {}).get("dir"),
+                        )
                 elif item_data is not None:
                     filtered[item] = item_data
 

@@ -20,6 +20,7 @@ from openbench.config.schema import (
 )
 from openbench.data.registry.manager import RegistryManager, _auto_resolve_variant
 from openbench.data.registry.schema import ModelProfile, ReferenceDataset, VariableMapping
+from openbench.util.names import canonical_variable_name
 
 
 def _load_builtin_yaml(filename: str) -> dict:
@@ -56,11 +57,11 @@ def _canonical_variable_name(name: str) -> str:
     renamed = {
         legacy_canopy_name: "Canopy_Evaporation",
     }
-    return renamed.get(name, name)
+    return canonical_variable_name(renamed.get(name, name))
 
 
 def _catalog_variable_names(data: dict) -> set[str]:
-    return {name for name in data.get("variables", {})}
+    return {_canonical_variable_name(name) for name in data.get("variables", {})}
 
 
 def _reference_entry_for_legacy_lowres(catalog: dict, legacy_name: str) -> str | None:
@@ -96,11 +97,8 @@ def test_builtin_reference_catalog_includes_legacy_lowres_variable_definitions()
     assert missing_variables == {}
 
 
-def test_legacy_lowres_aliases_use_current_reference_tree_subdirs():
+def test_lowres_aliases_use_current_reference_tree_subdirs():
     catalog = _load_builtin_yaml("reference_catalog.yaml")
-    data_root = _legacy_openbench_wei_root() / "dataset" / "Reference" / "Grid" / "LowRes"
-    if not data_root.exists():
-        pytest.skip(f"legacy reference data tree not available: {data_root}")
 
     expected_subdirs = {
         ("AH4GUC_LowRes", "Urban_Anthropogenic_Heat_Flux"): "Anth/Urban/AH4GUC",
@@ -108,8 +106,8 @@ def test_legacy_lowres_aliases_use_current_reference_tree_subdirs():
         ("ETMonitor_LowRes", "Urban_Latent_Heat_Flux"): "Anth/Urban/ETMonitor",
         ("GGMSEUD_LowRes", "Total_Irrigation_Amount"): "Anth/Crop/GGMSEUD",
         ("GIWUED_LowRes", "Total_Irrigation_Amount"): "Anth/Crop/GIWUED",
-        ("GLEAM_v4.2a_LowRes", "Canopy_Transpiration"): "Water/Transpiration/GLEAM_v4.2a",
-        ("GRFR_LowRes", "Runoff"): "Water/Total_Runoff/GRFR",
+        ("GLEAM_v4.2a_LowRes", "Canopy_Transpiration"): "Water/Canopy_Transpiration/GLEAM_v4.2a",
+        ("GRFR_LowRes", "Total_Runoff"): "Water/Total_Runoff/GRFR",
         ("MCD43A3_LowRes", "Urban_Albedo"): "Anth/Urban/MCD43A3",
         ("MODIS_LST_LowRes", "Urban_Surface_Temperature"): "Anth/Urban/MODIS_LST",
         ("TEMP_Zhang_etal_2022_LowRes", "Urban_Air_Temperature_Max"): "Anth/Urban/TEMP_Zhang_etal_2022",
@@ -120,7 +118,7 @@ def test_legacy_lowres_aliases_use_current_reference_tree_subdirs():
     mismatches = {}
     for (entry_name, variable_name), expected in expected_subdirs.items():
         actual = catalog[entry_name]["variables"][variable_name].get("sub_dir")
-        if actual != expected or not (data_root / expected).exists():
+        if actual != expected:
             mismatches[f"{entry_name}.{variable_name}"] = actual
 
     assert mismatches == {}
@@ -133,7 +131,7 @@ def test_builtin_reference_catalog_omits_scanner_placeholder_variables():
         "ETMonitor_LowRes": {"Urban"},
         "GGMSEUD_LowRes": {"Crop"},
         "GIWUED_LowRes": {"Crop"},
-        "GRFR_LowRes": {"Total_Runoff"},
+        "GRFR_LowRes": {"Runoff"},
         "MCD43A3_LowRes": {"Urban"},
         "MODIS_LST_LowRes": {"Urban"},
         "ResOpsUS": {"Dam"},
@@ -470,11 +468,12 @@ def test_packaged_station_lists_do_not_embed_developer_absolute_paths():
     assert bad == {}
 
 
-def test_gleam_open_water_profile_subdir_matches_catalog_variants():
+def test_gleam_plain_profile_keeps_paths_in_catalog_variants_only():
     catalog = _load_builtin_yaml("reference_catalog.yaml")
     profiles = _load_builtin_yaml("reference_profiles.yaml")
 
-    profile_subdir = profiles["GLEAM_v4.2a"]["variables"]["Open_Water_Evaporation"]["sub_dir"]
+    assert "sub_dir" not in profiles["GLEAM_v4.2a"]["variables"]["Open_Water_Evaporation"]
+    profile_subdir = "Water/Open_Water_Evaporation/GLEAM_v4.2a"
     catalog_subdirs = {
         variant: catalog[variant]["variables"]["Open_Water_Evaporation"]["sub_dir"]
         for variant in ("GLEAM_v4.2a_LowRes", "GLEAM_v4.2a_MidRes")
@@ -689,14 +688,14 @@ def test_formal_reference_scan_entries_are_bundled_and_profiled():
             "Day",
             "${OPENBENCH_REF_ROOT}/Station/Water/Transpiration",
             "Station/Water/Transpiration",
-            ["Canopy_Transpiration", "Transpiration"],
+            ["Canopy_Transpiration"],
         ),
         "Transpiration_SAPFLUXNET_Daily": (
             "stn",
             "Day",
             "${OPENBENCH_REF_ROOT}/Station/Water/Transpiration/SAPFLUXNET",
             "Station/Water/Transpiration/SAPFLUXNET",
-            ["Canopy_Transpiration", "Transpiration"],
+            ["Canopy_Transpiration"],
         ),
         "Rodai2025_NPP": (
             "stn",
@@ -730,7 +729,7 @@ def test_formal_reference_scan_entries_are_bundled_and_profiled():
             "grid",
             "Day",
             "${OPENBENCH_REF_ROOT}/Grid/MidRes",
-            "Grid/MidRes/Heat/Net_Radiation/Rn-Xu2022_0p25",
+            "Grid/MidRes/Heat/Net_Radiation/Rn-Xu2022",
             ["Net_Radiation"],
         ),
     }
@@ -765,20 +764,25 @@ def test_formal_reference_scan_entries_are_bundled_and_profiled():
             assert profile["variables"]["Lake_Area"]["varname"] == "LakeArea"
 
 
-def test_gleam_midres_raw_composite_is_ignored_because_standardized_entry_exists():
+@pytest.mark.parametrize("resolution", ["LowRes", "MidRes"])
+def test_gleam_raw_composite_is_ignored_because_standardized_entry_exists(resolution):
     catalog = _load_builtin_yaml("reference_catalog.yaml")
     profiles = _load_builtin_yaml("reference_profiles.yaml")
 
-    raw_profile = profiles["GLEAM_v4.2a_MidRes_RawComposite"]
-    assert raw_profile["scan"] == {
+    # Ignore hints are not registrations and remain useful if old originals still exist.
+    guard = f"GLEAM_v4.2a_{resolution}_RawComposite"
+    assert profiles[guard]["scan"] == {
         "layout": "ignore",
-        "root_sub_dir": "Grid/MidRes/Composite/GLEAM_v4.2",
+        "root_sub_dir": f"Grid/{resolution}/Composite/GLEAM_v4.2",
     }
+    assert guard not in catalog
+    assert "scan" not in profiles["GLEAM_v4.2a"]
+    assert all("child" not in var for var in profiles["GLEAM_v4.2a"]["variables"].values())
 
-    entry = catalog["GLEAM_v4.2a_MidRes"]
-    assert entry["root_dir"] == "${OPENBENCH_REF_ROOT}/Grid/MidRes"
+    entry = catalog[f"GLEAM_v4.2a_{resolution}"]
+    assert entry["root_dir"] == "${OPENBENCH_REF_ROOT}/Grid/" + resolution
     assert entry["variables"]["Evapotranspiration"]["sub_dir"] == "Water/Evapotranspiration/GLEAM_v4.2a"
-    assert entry["variables"]["Transpiration"]["sub_dir"] == "Water/Transpiration/GLEAM_v4.2a"
+    assert entry["variables"]["Canopy_Transpiration"]["sub_dir"] == "Water/Canopy_Transpiration/GLEAM_v4.2a"
 
 
 def test_expand_env_path_uses_persisted_reference_root_when_env_unset(
@@ -858,7 +862,53 @@ def test_list_references():
     assert isinstance(refs, list)
     assert len(refs) >= 1
     names = [r.name for r in refs]
-    assert "GLEAM_v4.2a_LowRes" in names
+    assert {
+        f"GLEAM_v{version}_{resolution}" for version in ("4.2a", "4.3a", "4.3b") for resolution in ("LowRes", "MidRes")
+    } <= set(names)
+
+
+@pytest.mark.parametrize("resolution,grid_res,tim_res", [("LowRes", 0.5, "Month"), ("MidRes", 0.25, "Day")])
+@pytest.mark.parametrize("version,years", [("4.3a", [1980, 2025]), ("4.3b", [2003, 2025])])
+def test_gleam_v43_catalog_and_candidates(tmp_path, resolution, grid_res, tim_res, version, years):
+    mgr = RegistryManager(user_dir=tmp_path)
+    name = f"GLEAM_v{version}_{resolution}"
+    ref = mgr.get_reference(name)
+    assert ref is not None
+    assert ref.category == "Water"
+    assert ref.data_type == "grid"
+    assert list(ref.years) == years
+    assert ref.grid_res == grid_res
+    assert ref.tim_res == tim_res
+    assert ref.data_groupby == "Year"
+    catalog = _load_builtin_yaml("reference_catalog.yaml")
+    assert catalog[name]["root_dir"] == f"${{OPENBENCH_REF_ROOT}}/Grid/{resolution}"
+    expected = {
+        "Bare_Soil_Evaporation": ("Eb", "mm day-1"),
+        "Canopy_Evaporation": ("Ei", "mm day-1"),
+        "Canopy_Transpiration": ("Et", "mm day-1"),
+        "Evapotranspiration": ("E", "mm day-1"),
+        "Open_Water_Evaporation": ("Ew", "mm day-1"),
+        "Root_Zone_Soil_Moisture": ("SMrz", "m3 m-3"),
+        "Surface_Soil_Moisture": ("SMs", "m3 m-3"),
+        "Sensible_Heat": ("H", "W m-2"),
+    }
+    assert set(ref.variables) == (set(expected) - {"Bare_Soil_Evaporation"}) | {"Soil_Evaporation"}
+    profile = _load_builtin_yaml("reference_profiles.yaml")[f"GLEAM_v{version}"]
+    assert "scan" not in profile
+    for variable, (varname, unit) in expected.items():
+        canonical = "Soil_Evaporation" if variable == "Bare_Soil_Evaporation" else variable
+        mapping = ref.variables[canonical]
+        category = "Heat" if variable == "Sensible_Heat" else "Water"
+        assert mapping.sub_dir == f"{category}/{variable}/GLEAM_v{version}"
+        assert mapping.varname == varname
+        assert mapping.varunit == unit
+        assert mapping.prefix == f"{varname}_"
+        assert mapping.suffix == f"_GLEAM_v{version}"
+        assert profile["variables"][variable] == {"varname": varname, "varunit": unit}
+        assert name in {candidate.name for candidate in mgr.references_for_variable(canonical)}
+    assert name in {candidate.name for candidate in mgr.list_references()}
+    assert mgr.get_resolution_variants(f"GLEAM_v{version}")[resolution].name == name
+    assert mgr.get_reference(f"GLEAM_v{version}", sim_tim_res=tim_res, sim_grid_res=grid_res).name == name
 
 
 def test_get_reference_exact():
@@ -1226,10 +1276,10 @@ LegacyModel:
     model = mgr.get_model("LegacyModel")
 
     assert model is not None
-    assert model.variables["Runoff"].varname == "runoff_primary"
-    assert model.variables["Runoff"].fallbacks is not None
-    assert [fb.varname for fb in model.variables["Runoff"].fallbacks] == ["runoff_fallback"]
-    assert model.variables["Runoff"].fallbacks[0].varunit == "mm day-1"
+    assert model.variables["Total_Runoff"].varname == "runoff_primary"
+    assert model.variables["Total_Runoff"].fallbacks is not None
+    assert [fb.varname for fb in model.variables["Total_Runoff"].fallbacks] == ["runoff_fallback"]
+    assert model.variables["Total_Runoff"].fallbacks[0].varunit == "mm day-1"
 
 
 def test_clm5_model_preserves_legacy_carbon_flux_mappings():

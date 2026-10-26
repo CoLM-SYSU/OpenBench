@@ -6,6 +6,7 @@ patterns. This adapter translates the new dataclass-based config.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass, replace
@@ -13,7 +14,12 @@ from typing import Any
 
 from openbench.config.schema import OpenBenchConfig, is_simple_project_name
 from openbench.data._system_resources import effective_cpu_count
-from openbench.util.names import get_mapping_key_case_insensitive, get_mapping_value_case_insensitive
+from openbench.data.registry.schema import reference_years
+from openbench.util.names import (
+    canonical_variable_name,
+    get_mapping_key_case_insensitive,
+    get_mapping_value_case_insensitive,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +38,17 @@ def _resolve_root_relative_path(path_value: str, root_dir: str | None) -> str:
     if os.path.isabs(expanded) or not root_dir:
         return _normalize_path(expanded)
     return _normalize_path(os.path.join(root_dir, expanded))
+
+
+def _resolved_vertical_datum(value, root_dir):
+    from openbench.data.vertical_datum import normalize_vertical_datum_spec
+
+    spec = normalize_vertical_datum_spec(value)
+    if spec is not None:
+        for key in ("source_geoid", "target_geoid"):
+            if key in spec:
+                spec[key] = os.path.abspath(_resolve_root_relative_path(spec[key], root_dir))
+    return spec
 
 
 LEGACY_GENERAL_KEYS = {
@@ -617,6 +634,10 @@ def _apply_reference_override(ref_ds, var_map, var_name: str, override: dict[str
         if str(key).lower() == str(var_name).lower() and isinstance(value, dict):
             var_override = value
             break
+    # An explicit dataset window overrides catalog binding coverage. A more
+    # specific variable override below can still replace it. Never mutate the registry.
+    if "years" in ds_fields and var_map is not None:
+        var_map = replace(var_map, years=None)
     if var_override and var_map is not None:
         var_fields = {k: v for k, v in var_override.items() if hasattr(var_map, k)}
         if var_fields.get("fulllist"):
@@ -788,9 +809,14 @@ def simulation_file_layout(sim_entry, model_profile, var_name: str) -> dict[str,
     Inline ``simulation.<label>.variables`` settings win over entry-level ones,
     which win over the model profile.
     """
-    inline_key = get_mapping_key_case_insensitive(sim_entry.variables or {}, var_name)
-    inline_vars = (sim_entry.variables or {}).get(inline_key, {}) if inline_key is not None else {}
-    profile_variables = getattr(model_profile, "variables", None) or {}
+    from openbench.data.registry.manager import _canonical_variable_overlays
+
+    # Programmatic configs can bypass the loader's logical-name normalization.
+    var_name = canonical_variable_name(var_name)
+    inline_variables = _canonical_variable_overlays(sim_entry.variables)
+    inline_key = get_mapping_key_case_insensitive(inline_variables, var_name)
+    inline_vars = inline_variables.get(inline_key, {}) if inline_key is not None else {}
+    profile_variables = _canonical_variable_overlays(getattr(model_profile, "variables", None))
     profile_key = get_mapping_key_case_insensitive(profile_variables, var_name) if model_profile else None
     profile_var = profile_variables[profile_key] if profile_key is not None else None
 
@@ -1113,10 +1139,8 @@ def build_legacy_namelists(cfg: OpenBenchConfig) -> tuple[dict, dict, dict]:
             section[f"{prefix}_data_groupby"] = ref_ds.data_groupby
             section[f"{prefix}_tim_res"] = ref_ds.tim_res
             section[f"{prefix}_grid_res"] = ref_ds.grid_res
-            # Both lines must guard against years=None (not just falsy).
-            # The previous eyear line called len(ref_ds.years) without a
-            # None check, raising TypeError when years was None.
-            ref_years = ref_ds.years or []
+            # Unregistered coverage falls back to the project window.
+            ref_years = reference_years(ref_ds, var_map) or []
             section[f"{prefix}_syear"] = ref_years[0] if ref_years else cfg.project.years[0]
             section[f"{prefix}_eyear"] = ref_years[1] if len(ref_years) > 1 else cfg.project.years[1]
             section[f"{prefix}_dir"] = ref_dir
@@ -1124,6 +1148,10 @@ def build_legacy_namelists(cfg: OpenBenchConfig) -> tuple[dict, dict, dict]:
             section[f"{prefix}_suffix"] = var_map.suffix
             section[f"{prefix}_timezone"] = ref_ds.timezone
 
+            if getattr(var_map, "vertical_datum", None) is not None:
+                section[f"{prefix}_vertical_datum"] = json.dumps(
+                    _resolved_vertical_datum(var_map.vertical_datum, ref_ds.root_dir or data_root)
+                )
             # Optional station-related fields
             if var_map.fulllist:
                 section[f"{prefix}_fulllist"] = _resolve_root_relative_path(
@@ -1253,6 +1281,11 @@ def build_legacy_namelists(cfg: OpenBenchConfig) -> tuple[dict, dict, dict]:
             var_section[f"{prefix}_prefix"] = var_prefix
             var_section[f"{prefix}_suffix"] = var_suffix
 
+            datum = inline_vars.get("vertical_datum", getattr(profile_var, "vertical_datum", None))
+            if datum is not None:
+                var_section[f"{prefix}_vertical_datum"] = json.dumps(
+                    _resolved_vertical_datum(datum, sim_entry.root_dir)
+                )
             # Pass inline/profile compute and fallbacks through to runtime.
             compute_expr = layout["compute"]
             if compute_expr:

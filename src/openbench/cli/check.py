@@ -16,6 +16,7 @@ from openbench.cli._names import resolve_variable_filters
 from openbench.cli._reference_errors import emit_reference_resolution_error
 from openbench.cli._simulation_validation import simulation_root_errors
 from openbench.config.provenance import PROVENANCE_FIELDS
+from openbench.data.registry.schema import reference_years
 from openbench.util.names import get_mapping_key_case_insensitive
 from openbench.util.static_datasets import static_dataset_candidates, static_dataset_exists
 
@@ -384,7 +385,7 @@ def _simulation_probe_years(cfg, variable, resolved_refs):
         span = _station_year_span(
             getattr(mapping, "fulllist", None) or getattr(ref, "fulllist", None),
             root,
-            getattr(ref, "years", None),
+            reference_years(ref, mapping),
             side="ref",
         )
         required.update(_probe_years(cfg.project.years, span))
@@ -606,7 +607,9 @@ def _reference_file_findings(cfg, resolved_ref, registry=None) -> tuple[list[str
         return [], []  # the directory checks already report a missing or empty directory
     required_years = _probe_years(
         cfg.project.years,
-        None if getattr(cfg.project, "time_alignment", "intersection") == "strict" else getattr(ref_ds, "years", None),
+        None
+        if getattr(cfg.project, "time_alignment", "intersection") == "strict"
+        else reference_years(ref_ds, var_map),
     )
     if registry is None:
         from openbench.data.registry.manager import get_registry
@@ -624,7 +627,7 @@ def _reference_file_findings(cfg, resolved_ref, registry=None) -> tuple[list[str
         station_years.update(_probe_years(cfg.project.years, span))
     if only_station_pairs:
         required_years = sorted(
-            station_years.intersection(_probe_years(cfg.project.years, getattr(ref_ds, "years", None)))
+            station_years.intersection(_probe_years(cfg.project.years, reference_years(ref_ds, var_map)))
         )
     errors, warnings = data_file_findings(
         "Reference",
@@ -734,7 +737,7 @@ def _reference_metadata_findings(
     errors.extend(tz_errors)
     warnings.extend(tz_warnings)
 
-    year_errors, year_warnings = _years_findings(ref_name, getattr(ref_ds, "years", None), cfg.project.years)
+    year_errors, year_warnings = _years_findings(ref_name, reference_years(ref_ds, _var_map), cfg.project.years)
     errors.extend(year_errors)
     warnings.extend(year_warnings)
 
@@ -763,12 +766,8 @@ def _effective_sim_values(entry, model_profile, var_name: str) -> dict[str, Any]
     from openbench.config.adapter import simulation_file_layout
 
     layout = simulation_file_layout(entry, model_profile, var_name)
-    inline_variables = entry.variables or {}
-    inline_key = get_mapping_key_case_insensitive(inline_variables, var_name)
-    inline = inline_variables.get(inline_key, {}) if inline_key is not None else {}
-    profile_variables = getattr(model_profile, "variables", {}) if model_profile else {}
-    profile_key = get_mapping_key_case_insensitive(profile_variables, var_name)
-    profile_var = profile_variables.get(profile_key) if profile_key is not None else None
+    inline = layout["inline_vars"]
+    profile_var = layout["profile_var"]
     return {
         "inline": inline,
         "data_type": inline.get("data_type")

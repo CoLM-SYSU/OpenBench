@@ -7,7 +7,7 @@ Walks a reference data directory tree with the structure:
     <root>/Station/<category>/<variable>/<dataset>/
 
 Groups datasets by base name across resolutions so the GUI can offer
-resolution choices (e.g., GLEAM_v4.2a → LowRes / MidRes / HigRes).
+resolution choices (e.g., GLEAM_v4.3a → LowRes / MidRes / HigRes).
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import yaml
 from openbench.data.registry._tim_res import _TIM_RES_RANK, _tim_res_rank  # noqa: F401 (re-exported)
 from openbench.config.schema import DEFAULT_NUM_CORES
 from openbench.config.user_settings import resolve_home_dir, resolve_reference_root
-from openbench.util.names import AmbiguousNameError
+from openbench.util.names import AmbiguousNameError, canonical_variable_name
 from openbench.util.netcdf import write_file_atomic
 
 logger = logging.getLogger(__name__)
@@ -193,6 +193,9 @@ def _load_builtin_catalog_for_user_overlay(catalog_path: Path) -> dict:
 
 def _merge_descriptor_overlay(base: Optional[dict], overlay: Optional[dict]) -> Optional[dict]:
     """Merge a raw user overlay dict onto a raw bundled descriptor dict."""
+    from openbench.data.registry.manager import _migrate_legacy_entry_aliases
+
+    overlay = _migrate_legacy_entry_aliases(overlay, context="existing scan catalog")
     if base is None:
         return overlay
     if not overlay:
@@ -200,8 +203,14 @@ def _merge_descriptor_overlay(base: Optional[dict], overlay: Optional[dict]) -> 
 
     import copy
 
+    from openbench.data.registry.manager import _canonical_variable_overlays
+
     merged = copy.deepcopy(base)
+    if isinstance(merged.get("variables"), dict):
+        merged["variables"] = _canonical_variable_overlays(merged["variables"])
     for key, value in overlay.items():
+        if key == "variables" and isinstance(value, dict):
+            value = _canonical_variable_overlays(value)
         if key == "variables" and isinstance(value, dict) and isinstance(merged.get(key), dict):
             variables = copy.deepcopy(merged["variables"])
             for var_name, var_data in value.items():
@@ -223,10 +232,14 @@ def _merge_descriptor_overlay(base: Optional[dict], overlay: Optional[dict]) -> 
 
 def _descriptor_overlay_diff(base: dict, descriptor: dict) -> dict:
     """Return the minimal user overlay needed to reproduce descriptor over base."""
+    from openbench.data.registry.manager import _canonical_variable_overlays
+
     overlay: dict = {}
     for key, value in descriptor.items():
         base_value = base.get(key)
         if key == "variables" and isinstance(value, dict) and isinstance(base_value, dict):
+            value = _canonical_variable_overlays(value)
+            base_value = _canonical_variable_overlays(base_value)
             variable_overlay = {
                 var_name: var_data for var_name, var_data in value.items() if base_value.get(var_name) != var_data
             }
@@ -445,8 +458,8 @@ def get_reference_profile(dataset_name: str) -> dict | None:
     """Look up a reference profile by exact name or base name (without resolution suffix).
 
     Matching order:
-    1. Exact match: "GLEAM_v4.2a_LowRes" → profile["GLEAM_v4.2a_LowRes"]
-    2. Base name:   "GLEAM_v4.2a_LowRes" → strip "_LowRes" → profile["GLEAM_v4.2a"]
+    1. Exact match: "GLEAM_v4.3a_LowRes" → profile["GLEAM_v4.3a_LowRes"]
+    2. Base name:   "GLEAM_v4.3a_LowRes" → strip "_LowRes" → profile["GLEAM_v4.3a"]
 
     Returns profile dict or None.
     """
@@ -525,7 +538,7 @@ def _has_custom_station_filter(dataset_name: str) -> bool:
 class ScannedDataset:
     """A discovered dataset with its location and resolution info."""
 
-    name: str  # e.g., "GLEAM_v4.2a"
+    name: str  # e.g., "GLEAM_v4.3a"
     resolution: str  # "LowRes", "MidRes", "HigRes", or "Station"
     category: str  # "Water", "Energy", etc.
     data_type: str  # "grid" or "stn"
@@ -544,7 +557,7 @@ class ScannedDataset:
 
     @property
     def registry_name(self) -> str:
-        """Name for registry entry: 'GLEAM_v4.2a_LowRes'."""
+        """Name for registry entry: 'GLEAM_v4.3a_LowRes'."""
         if self.data_type == "stn":
             return self.name
         return f"{self.name}_{self.resolution}"
@@ -554,7 +567,7 @@ class ScannedDataset:
 class DatasetGroup:
     """A dataset that may exist at multiple resolutions."""
 
-    base_name: str  # e.g., "GLEAM_v4.2a"
+    base_name: str  # e.g., "GLEAM_v4.3a"
     variants: dict[str, ScannedDataset] = field(default_factory=dict)  # resolution -> ScannedDataset
 
     @property
@@ -1914,6 +1927,11 @@ def _register_to_dict(
       4. _apply_profile_overrides  — reference_profiles.yaml metadata + variables
       5. _finalize_descriptor      — grid_res default, provenance, station fulllist
     """
+    from openbench.data.registry.manager import _migrate_legacy_entry_aliases
+
+    existing_descriptor = _migrate_legacy_entry_aliases(
+        existing_descriptor, context=f"existing scan catalog:{scanned.registry_name}"
+    )
     prov: dict[str, str] = {}
 
     # Stage 1: base descriptor
@@ -2194,26 +2212,36 @@ def _build_variables(scanned, descriptor: dict, existing_descriptor, on_multi_va
     NC-detected fields (_detected_data_type, _nc_tim_res, _nc_grid_res) are
     stored as temporary keys on var entries for Stage 3 to consume.
     """
+    from openbench.data.registry.manager import _canonical_variable_overlays, _migrate_legacy_variable_aliases
+
     variables = {}
     profile = get_reference_profile(scanned.registry_name) or get_reference_profile(scanned.name)
     profile_vars = (
         profile.get("variables", {}) if isinstance(profile, dict) and isinstance(profile.get("variables"), dict) else {}
     )
-    profile_replaces_placeholder_variables = bool(profile_vars) and not any(
-        vn in profile_vars for vn in scanned.variables
+    profile_vars = _canonical_variable_overlays(profile_vars)
+    existing_vars = _canonical_variable_overlays((existing_descriptor or {}).get("variables"))
+    scanned_vars = _migrate_legacy_variable_aliases(
+        scanned.variables, context=f"scan {scanned.registry_name} under {scanned.root_dir}"
     )
-    for var_name, sub_dir in scanned.variables.items():
+    profile_replaces_placeholder_variables = bool(profile_vars) and not any(vn in profile_vars for vn in scanned_vars)
+    seen = set()
+    # Retain the chosen raw key for remote inspection/file-glob lookups.
+    for var_name, sub_dir in sorted(
+        scanned.variables.items(), key=lambda item: item[0] != canonical_variable_name(item[0])
+    ):
+        canonical_name = canonical_variable_name(var_name)
+        if canonical_name in seen or scanned_vars[canonical_name] != sub_dir:
+            continue
+        seen.add(canonical_name)
         var_entry: dict = {"varname": var_name, "varunit": ""}
         if sub_dir:
             var_entry["sub_dir"] = sub_dir
         suppress_existing_filename_pattern = False
 
-        existing_var = None
-        if existing_descriptor:
-            existing_vars = existing_descriptor.get("variables", {})
-            if var_name in existing_vars:
-                existing_var = existing_vars[var_name]
-        profile_var = profile_vars.get(var_name)
+        canonical_name = canonical_variable_name(var_name)
+        existing_var = existing_vars.get(canonical_name)
+        profile_var = profile_vars.get(canonical_name)
         profile_defines_varname = isinstance(profile_var, dict) and bool(profile_var.get("varname"))
         suppress_multi_var_prompt = profile_defines_varname or profile_replaces_placeholder_variables
 
@@ -2293,12 +2321,13 @@ def _build_variables(scanned, descriptor: dict, existing_descriptor, on_multi_va
                     continue
                 if key in {"prefix", "suffix"} and suppress_existing_filename_pattern:
                     continue
-                if value is not None and value != "":
+                # These nulls explicitly clear bundled binding metadata on rescan.
+                if (value is None and key in {"years", "vertical_datum"}) or (value is not None and value != ""):
                     var_entry[key] = value
 
         variables[var_name] = var_entry
 
-    return variables
+    return _canonical_variable_overlays(variables)
 
 
 # ---------------------------------------------------------------------------
@@ -2457,6 +2486,8 @@ def _merge_profile_var_fields(
     def set_field(key: str, value) -> None:
         if value is None:
             return
+        if not overwrite_existing and key in {"years", "vertical_datum"} and key in target and target[key] is None:
+            return  # An explicit clear is not a missing profile default.
         if overwrite_existing or target.get(key) in (None, ""):
             target[key] = value
 
@@ -2486,9 +2517,13 @@ def _apply_profile_overrides(
 
     Returns the (possibly replaced) variables dict.
     """
+    from openbench.data.registry.manager import _canonical_variable_overlays
+
+    variables = _canonical_variable_overlays(variables)
+    existing_vars = _canonical_variable_overlays((existing_descriptor or {}).get("variables"))
     profile = get_reference_profile(scanned.registry_name) or get_reference_profile(scanned.name)
     if profile:
-        profile_vars = profile.get("variables", {})
+        profile_vars = _canonical_variable_overlays(profile.get("variables"))
 
         # Override metadata from profile (authoritative, except nc-detected tim_res)
         if profile.get("description"):
@@ -2515,15 +2550,14 @@ def _apply_profile_overrides(
                 # Standard dataset: merge descriptor-relevant variable fields
                 # from profile while keeping NC-derived fields for variables
                 # that the profile does not mention.
-                existing_vars = (
-                    existing_descriptor.get("variables", {}) if isinstance(existing_descriptor, dict) else {}
-                )
                 for vn, pv in profile_vars.items():
                     if vn in variables:
                         existing_var = existing_vars.get(vn)
                         if isinstance(existing_var, dict):
                             for key, value in _public_existing_var_fields(existing_var).items():
-                                if value is not None and value != "":
+                                if (value is None and key in {"years", "vertical_datum"}) or (
+                                    value is not None and value != ""
+                                ):
                                     variables[vn][key] = value
                         _merge_profile_var_fields(
                             variables[vn],
@@ -2547,9 +2581,6 @@ def _apply_profile_overrides(
                 # Replace with profile variable mappings. If a previous catalog
                 # already has the profile variable key, preserve its user/locator
                 # fields and let profile metadata fill only missing values.
-                existing_vars = (
-                    existing_descriptor.get("variables", {}) if isinstance(existing_descriptor, dict) else {}
-                )
                 variables = {}
                 for vn, pv in profile_vars.items():
                     existing_var = existing_vars.get(vn)

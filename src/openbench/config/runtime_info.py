@@ -10,6 +10,7 @@ Version: 2.0
 Date: July 2025
 """
 
+import json
 import logging
 import os
 import re
@@ -201,6 +202,17 @@ class GeneralInfoReader:
         for source_type in ["ref", "sim"]:
             source = ref_source if source_type == "ref" else sim_source
             nml = ref_nml if source_type == "ref" else sim_nml
+            from openbench.data.vertical_datum import normalize_vertical_datum_spec
+
+            datum = nml[item].get(f"{source}_vertical_datum")
+            if isinstance(datum, str):
+                datum = json.loads(datum)
+            datum = normalize_vertical_datum_spec(datum)
+            if datum is not None:
+                from openbench.config.adapter import _resolved_vertical_datum
+
+                datum = _resolved_vertical_datum(datum, nml[item].get(f"{source}_dir"))
+            setattr(self, f"{source_type}_vertical_datum", datum)
             attributes = [
                 "data_type",
                 "varname",
@@ -859,7 +871,7 @@ class GeneralInfoReader:
             except (ValueError, AttributeError):
                 pass
 
-        # For grid reference data (like GLEAM4.2a) used with station simulation data,
+        # For grid reference data (like GLEAM) used with station simulation data,
         # apply additional validation to ensure data availability
         if self.ref_data_type == "grid" and self.sim_data_type == "stn":
             # Check reference coverage; this is more conservative than flagging all stations as True.
