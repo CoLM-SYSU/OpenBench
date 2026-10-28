@@ -1,0 +1,51 @@
+project:
+  name: template
+  output_dir: ./output
+  years: [2001, 2005]
+  min_year_threshold: 1
+  tim_res: Day
+  grid_res: 0.1
+  num_cores: 3
+  time_alignment: intersection
+  unified_mask: true
+  generate_report: true
+  IGBP_groupby: false
+  PFT_groupby: false
+  climate_zone_groupby: false
+  debug_mode: false
+  only_drawing: false
+  force: false
+  strict_reference: false
+
+evaluation:
+  variables:
+    - Streamflow
+
+reference:
+  Streamflow: GRDC_Daily
+
+simulation: {}
+
+metrics:
+  - RMSE
+  - correlation
+  - percent_bias
+  - NSE
+  - KGE
+  - KGESS
+  - MFM
+
+scores:
+  - Overall_Score
+
+comparison:
+  enabled: true
+  items:
+    - Taylor_Diagram
+    - HeatMap
+    - Portrait_Plot_seasonal
+    - Diff_Plot
+
+statistics:
+  enabled: false
+  items: []

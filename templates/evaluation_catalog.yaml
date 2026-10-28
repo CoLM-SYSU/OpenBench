@@ -1,0 +1,121 @@
+# Region settings come from the existing working evaluation YAML files.
+# Experiment entries are included only when root_dir and matching unitcat files exist.
+regions:
+  amazon:
+    display_name: Amazon
+    settings:
+      streamflow:
+        lat_range: [-22.0, 11.0]
+        lon_range: [-82.0, -35.0]
+        basin_mask: /share/home/dq134/wzx/openbench/basin_mask/outputs/basin_masks_06min/amazon/amazon_basin.nc
+      inundation:
+        lat_range: [-21.0, 6.0]
+        lon_range: [-80.0, -48.0]
+        basin_mask: /share/home/dq134/wzx/openbench/basin_mask/outputs/basin_masks_06min/amazon/amazon_basin.nc
+    experiments:
+      D:
+        case_name: SA_D_0p1
+        root_dir: /share/home/dq061/cases/SA_D_0p1/history
+        prefix: SA_D_0p1_hist_unitcat_
+      L:
+        case_name: SA_L_0p1
+        root_dir: /share/home/dq061/cases/SA_L_0p1/history
+        prefix: SA_L_0p1_hist_unitcat_
+      B:
+        case_name: SA_B_0p1
+        root_dir: /share/home/dq061/cases/SA_B_0p1/history
+        prefix: SA_B_0p1_hist_unitcat_
+      DB:
+        case_name: SA_DB_0p1
+        root_dir: /share/home/dq134/wzx/CoLM/cases/SA_DB_0p1/history
+        prefix: SA_DB_0p1_hist_unitcat_
+      ctl:
+        case_name: SA_ctl_0p10
+        root_dir: /share/home/dq061/cases/SA_ctl_0p10/history
+        prefix: SA_ctl_0p10_hist_unitcat_
+
+  lower_mississippi:
+    display_name: LowerMississippi
+    settings:
+      streamflow:
+        lat_range: [28.0, 40.0]
+        lon_range: [-108.0, -88.0]
+        basin_mask: /share/home/dq134/wzx/openbench/basin_mask/outputs/colm_focus_basins_full/mississippi_cairo_to_mouth_added_catchments/mississippi_cairo_to_mouth_added_catchments_basin.nc
+      inundation:
+        lat_range: [28.0, 40.0]
+        lon_range: [-108.0, -88.0]
+        basin_mask: /share/home/dq134/wzx/openbench/basin_mask/outputs/colm_focus_basins_full/mississippi_cairo_to_mouth_added_catchments/mississippi_cairo_to_mouth_added_catchments_basin.nc
+    experiments: &usa_experiments
+      D:
+        case_name: USA_D_0p1
+        root_dir: /share/home/dq061/cases/USA_D_0p1/history
+        prefix: USA_D_0p1_hist_unitcat_
+      L:
+        case_name: USA_L_0p1
+        root_dir: /share/home/dq134/wzx/CoLM/cases/USA_L_0p1/history
+        prefix: USA_L_0p1_hist_unitcat_
+      B:
+        case_name: USA_B_0p1
+        root_dir: /share/home/dq061/cases/USA_B_0p1/history
+        prefix: USA_B_0p1_hist_unitcat_
+      DB:
+        case_name: USA_DB_0p1_daily
+        root_dir: /share/home/dq134/wzx/CoLM/cases/USA_DB_0p1_daily/history
+        prefix: USA_DB_0p1_daily_hist_unitcat_
+      DLB:
+        case_name: USA_DLB_0p1
+        root_dir: /share/home/dq134/wzx/CoLM/cases/USA_DLB_0p1/history
+        prefix: USA_DLB_0p1_hist_unitcat_
+      ctl:
+        case_name: USA_ctl_0p10
+        root_dir: /share/home/dq061/cases/USA_ctl_0p1/history
+        prefix: USA_ctl_0p1_hist_unitcat_
+
+  mekong:
+    display_name: Mekong
+    settings:
+      streamflow:
+        lat_range: [9.0, 34.0]
+        lon_range: [93.0, 109.0]
+        basin_mask: /share/home/dq134/wzx/openbench/basin_mask/outputs/basin_masks_06min/mekong/mekong_basin.nc
+      inundation:
+        lat_range: [9.0, 34.0]
+        lon_range: [93.0, 109.0]
+        basin_mask: /share/home/dq134/wzx/openbench/basin_mask/outputs/basin_masks_06min/mekong/mekong_basin.nc
+    experiments:
+      D:
+        case_name: Mekong_D_0p1
+        root_dir: /share/home/dq061/cases/Mekong_D_0p1/history
+        prefix: Mekong_D_0p1_hist_unitcat_
+      L:
+        case_name: Mekong_L_0p1
+        root_dir: /share/home/dq061/cases/Mekong_L_0p1/history
+        prefix: Mekong_L_0p1_hist_unitcat_
+      B:
+        case_name: Mekong_B_0p1
+        root_dir: /share/home/dq061/cases/Mekong_B_0p1/history
+        prefix: Mekong_B_0p1_hist_unitcat_
+      ctl:
+        case_name: Mekong_ctl_0p10
+        root_dir: /share/home/dq061/cases/Mekong_ctl_0p10/history
+        prefix: Mekong_ctl_0p10_hist_unitcat_
+
+  missouri:
+    display_name: Missouri
+    settings:
+      streamflow:
+        lat_range: [36.0, 51.0]
+        lon_range: [-115.0, -89.0]
+        basin_mask: /share/home/dq134/wzx/openbench/basin_mask/outputs/colm_focus_basins_full/missouri_before_confluence/missouri_before_confluence_basin.nc
+      inundation:
+        lat_range: [37.0, 50.0]
+        lon_range: [-115.0, -89.0]
+        basin_mask: /share/home/dq134/wzx/openbench/basin_mask/outputs/basin_masks_06min/missouri/missouri_basin.nc
+    experiments: *usa_experiments
+
+simulation_defaults:
+  model: CoLM2024
+  data_type: grid
+  tim_res: Day
+  grid_res: 0.1
+  data_groupby: Month

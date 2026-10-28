@@ -1,0 +1,96 @@
+# OpenBench 通用配置模板
+# 使用方法：复制本文件并搜索“【必改】”和“【按需】”。
+# 本模板默认展示两个 grid simulation；不需要的 case 可整段删除。
+
+project:
+  name: CHANGE_ME_PROJECT                 # 【必改】输出子目录名；不要含空格或路径符号
+  output_dir: ./output                    # 【按需】输出根目录
+  years: [2001, 2005]                     # 【必改】评估起止年（含首尾）
+  min_year_threshold: 1                   # 【按需】站点有效年数下限
+  tim_res: Month                          # 【必改】目标时间分辨率：Day / Month / Year 等
+  grid_res: 0.25                          # 【必改】目标网格分辨率（度）
+  lat_range: [-90.0, 90.0]                # 【必改】[南界, 北界]
+  lon_range: [-180.0, 180.0]              # 【必改】[西界, 东界]
+  # basin_mask: /absolute/path/basin.nc   # 【按需】流域掩膜；不用时保持注释
+  num_cores: 3                            # 【按需】并行核数；删除或设 0 表示自动
+  time_alignment: intersection
+  unified_mask: true
+  generate_report: true
+  IGBP_groupby: false
+  PFT_groupby: false
+  climate_zone_groupby: false
+  debug_mode: false
+  only_drawing: false
+  force: false
+  strict_reference: false
+
+evaluation:
+  variables:                              # 【必改】必须与 reference 和 simulation.variables 对应
+    - Inundation_Fraction
+    - Inundation_Area
+
+reference:                                # 【必改】变量 -> OpenBench 参考数据集名
+  Inundation_Fraction: GIEMS_MC_LowRes
+  Inundation_Area: GIEMS_MC_LowRes
+  # data_root: /path/to/reference/root    # 【按需】自定义参考数据根目录
+
+simulation:
+  CHANGE_ME_CASE_A:                       # 【必改】case 标签（会出现在结果文件名中）
+    model: CoLM2024                       # 【必改】模型注册名
+    root_dir: /path/to/case_a/history     # 【必改】模拟数据目录
+    data_type: grid                       # 【必改】grid 或 stn
+    tim_res: Day                          # 【必改】原始模拟数据时间分辨率
+    grid_res: 0.1                         # 【必改】原始模拟网格分辨率
+    data_groupby: Month                   # 【必改】文件切分方式：Year / Month / Day / single
+    variables:
+      Inundation_Fraction:
+        prefix: CHANGE_ME_CASE_A_hist_unitcat_  # 【必改】文件名前缀
+        suffix: null                           # 【按需】文件名后缀；没有则 null
+      Inundation_Area:
+        prefix: CHANGE_ME_CASE_A_hist_unitcat_
+        suffix: null
+
+  CHANGE_ME_CASE_CTL:
+    model: CoLM2024
+    root_dir: /path/to/control/history
+    data_type: grid
+    tim_res: Day
+    grid_res: 0.1
+    data_groupby: Month
+    variables:
+      Inundation_Fraction:
+        prefix: CHANGE_ME_CASE_CTL_hist_unitcat_
+        suffix: null
+      Inundation_Area:
+        prefix: CHANGE_ME_CASE_CTL_hist_unitcat_
+        suffix: null
+
+# 淹没面积/比例的常用组合；径流建议见 TEMPLATE_GUIDE.md。
+metrics:
+  - bias
+  - RMSE
+  - correlation
+  - percent_bias
+  - NSE
+  - KGESS
+  - MFM
+
+scores:
+  - Overall_Score
+  - nBiasScore
+  - nRMSEScore
+  - nPhaseScore
+  - nIavScore
+  - nSpatialScore
+  - nSeasonalityScore
+
+comparison:
+  enabled: true
+  items:
+    - Taylor_Diagram
+    - HeatMap
+    - Diff_Plot
+
+statistics:
+  enabled: false
+  items: []

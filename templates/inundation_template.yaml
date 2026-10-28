@@ -1,0 +1,58 @@
+project:
+  name: template
+  output_dir: ./output
+  years: [2001, 2005]
+  min_year_threshold: 1
+  tim_res: Month
+  grid_res: 0.25
+  num_cores: 3
+  time_alignment: intersection
+  unified_mask: true
+  generate_report: true
+  IGBP_groupby: false
+  PFT_groupby: false
+  climate_zone_groupby: false
+  debug_mode: false
+  only_drawing: false
+  force: false
+  strict_reference: false
+
+evaluation:
+  variables:
+    - Inundation_Fraction
+    - Inundation_Area
+
+reference:
+  Inundation_Fraction: GIEMS_MC_LowRes
+  Inundation_Area: GIEMS_MC_LowRes
+
+simulation: {}
+
+metrics:
+  - bias
+  - RMSE
+  - correlation
+  - percent_bias
+  - NSE
+  - KGESS
+  - MFM
+
+scores:
+  - Overall_Score
+  - nBiasScore
+  - nRMSEScore
+  - nPhaseScore
+  - nIavScore
+  - nSpatialScore
+  - nSeasonalityScore
+
+comparison:
+  enabled: true
+  items:
+    - Taylor_Diagram
+    - HeatMap
+    - Diff_Plot
+
+statistics:
+  enabled: false
+  items: []
