@@ -393,6 +393,8 @@ class StationProcessingCoreMixin:
             # Select before CF decoding so VLEN metadata is not padded across every station.
             with xr.backends.NetCDF4DataStore.open(file_path) as store:
                 stn_data = xr.Dataset.load_store(store)
+                # Keep the source path in encoding so error messages still name the file.
+                stn_data.encoding["source"] = str(file_path)
                 stn_data = self._select_merged_station_data(stn_data, station, datasource)
                 stn_data = Convert_Type.convert_nc(xr.decode_cf(stn_data))
                 processed_data = self.process_single_station_data(stn_data, start_year, end_year, datasource)
