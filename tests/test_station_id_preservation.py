@@ -274,7 +274,11 @@ def test_station_read_decodes_vlen_metadata_only_after_selecting_one_station(tmp
     assert "station" not in selected.dims
     assert selected.temperature.values[0] == pytest.approx(2.0)
     assert np.isnan(selected.temperature.values[1])
-    assert selected.time.values.tolist() == pd.date_range("2001-01-01", periods=2).values.tolist()
+    expected_time = pd.date_range("2001-01-01", periods=2)
+    np.testing.assert_array_equal(
+        np.asarray(selected.time.values, dtype="datetime64[ns]"),
+        np.asarray(expected_time.values, dtype="datetime64[ns]"),
+    )
     assert selected.station_metadata.item() == "long provenance " * 100
 
 
