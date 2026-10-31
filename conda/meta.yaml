@@ -1,6 +1,6 @@
 {% set name = "colm-openbench" %}
 {% set dist_name = name|replace("-", "_") %}
-{% set version = "3.1.0" %}
+{% set version = "3.1.1" %}
 
 package:
   name: {{ name|lower }}
@@ -8,7 +8,7 @@ package:
 
 source:
   url: https://files.pythonhosted.org/packages/source/{{ name[0] }}/{{ name }}/{{ dist_name }}-{{ version }}.tar.gz
-  sha256: 8295c3ef9e2e0656a637f0ed5a401aa519eb851492382192b33cb32b111b3504
+  sha256: 65495d89287709a683ac6348672adcfa30b21747373933a8d1fa4a585baa06aa
 
 build:
   noarch: python

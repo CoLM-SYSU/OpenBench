@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.1.1] - 2026-10-31
+
+### Fixed
+- Regenerate the bundled registry history so the OBRefGen station reference
+  entries are covered by runtime validation and the registry history test.
+- Preserve the station file encoding source path when loading merged NetCDF
+  files directly, so fatal station compute errors still name the file.
+
+### Packaging
+- Rebuild the 3.1.1 sdist and wheel with the fixes above (3.1.0 artifacts on
+  PyPI predate them).
+
 ## [3.1.0] - 2026-10-31
 
 ### Added
