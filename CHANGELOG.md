@@ -1,8 +1,15 @@
 # Changelog
 
-## [Unreleased]
+## [3.1.0] - 2026-10-31
 
 ### Added
+- Register the OBRefGen station reference products delivered on 2026-10-31:
+  lake area/level (ReaLSAT, G-REALM), FLUX and Urban-PLUMBER tower products,
+  soil moisture (CEMADEN, ISMN, SONTE-China), SWE, groundwater (USGS) and the
+  composite FLUX products, together with their station lists and mapping rules.
+- Accept `source_station_id` as a station identifier in merged station files and
+  prefer `station_id` when both are present, so source identifiers are preserved
+  instead of being coerced to numbers.
 - Make `Water_Surface_Elevation` selectable in the GUI and add opt-in station
   EGM2008-to-EGM96 correction using two external GeographicLib PGM grids.
   Only observations are corrected; model output is already EGM96 and units must be metres.
@@ -20,6 +27,11 @@
   the partial eighth soil layer. Nonstandard profile lengths fail closed.
 
 ### Fixed
+- Select the requested stations before CF decoding so VLEN metadata is not padded
+  across every station, and keep per-variable fulllists from overriding merged
+  NetCDF paths during reference scanning.
+- Skip profile-consumed directories while scanning station references so the same
+  NetCDF products are not registered twice.
 - Reject simulation `vertical_datum` overrides during YAML loading. Datum-enabled
   `only_drawing` refreshes station metrics and plots from existing NetCDFs through
   the normal correction path, without rewriting inputs or accumulating offsets.
