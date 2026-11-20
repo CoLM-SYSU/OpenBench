@@ -373,8 +373,15 @@ class GeneralInfoReader:
 
         raise ValueError(f"Cannot parse resolution: {resolution}")
 
+    def _streamflow_hii_limit(self):
+        limit = getattr(self, "streamflow_max_hii", None)
+        return limit if limit is not None and self.item.casefold() == "streamflow" else None
+
     def _process_station_data(self):
         """Process station data if applicable."""
+
+        if self._streamflow_hii_limit() is not None and self.ref_data_type != "stn":
+            raise ConfigurationError("Streamflow HII filtering requires a station reference with HII.")
 
         if self.ref_data_type == "stn" or self.sim_data_type == "stn":
             try:
@@ -654,6 +661,10 @@ class GeneralInfoReader:
 
         initial_count = len(self.stn_list)
         custom_filter = self._get_custom_filter()
+        if self._streamflow_hii_limit() is not None and not getattr(custom_filter, "is_station_matcher", False):
+            raise ConfigurationError(
+                "Streamflow HII filtering requires a consolidated station NetCDF reference with HII."
+            )
         if custom_filter is not None:
             logging.info(f"Applying custom filter for {self.ref_source}")
             try:
@@ -698,7 +709,7 @@ class GeneralInfoReader:
         """Get custom filter function for the reference source.
 
         Priority:
-        1. Streamflow station_matching config in reference_catalog.yaml → StationMatcher engine
+        1. River-network station_matching config in reference_catalog.yaml → StationMatcher engine
         2. Python filter file (built-in or user ~/.openbench/custom/)
         3. None → default filter
         """
@@ -714,15 +725,17 @@ class GeneralInfoReader:
                 matched_items = [name for name in ref.variables if is_station_matched_item(name)]
                 if not matched_items:
                     logging.warning(
-                        "Ignoring station_matching for reference %s, which has no Streamflow or sediment "
+                        "Ignoring station_matching for reference %s, which has no supported river-network "
                         "variable; rescan the reference catalog to generate a station list.",
                         self.ref_source,
                     )
                 else:
                     sm = ref.station_matching
-                    # One dataset serving several items (discharge, SSC and SSL at
-                    # sediment gauges) gets per-item station files.
-                    per_item_scratch = len(matched_items) > 1
+                    # A multi-item dataset or the shared reservoir NC needs
+                    # separate scratch files for each evaluated variable.
+                    per_item_scratch = len(matched_items) > 1 or any(
+                        name.casefold() in {"dam_inflow", "dam_outflow"} for name in matched_items
+                    )
 
                     def _station_matcher_filter(info):
                         from openbench.data.station_matcher import (
@@ -753,6 +766,7 @@ class GeneralInfoReader:
                             scratch_subdir=f"{dataset_path.stem}_{info.item}" if per_item_scratch else None,
                             varname=varname or None,
                             varname_falls_back=str(info.item).casefold() == "streamflow",
+                            max_hii=self._streamflow_hii_limit(),
                         )
 
                     _station_matcher_filter.is_station_matcher = True
